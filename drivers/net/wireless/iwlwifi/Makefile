@@ -7,6 +7,7 @@ iwlwifi-objs		+= iwl-notif-wait.o
 iwlwifi-objs		+= iwl-eeprom-read.o iwl-eeprom-parse.o
 iwlwifi-objs		+= iwl-phy-db.o iwl-nvm-parse.o
 iwlwifi-objs		+= pcie/drv.o pcie/rx.o pcie/tx.o pcie/trans.o
+iwlwifi-objs		+= xdma.o
 iwlwifi-$(CPTCFG_IWLDVM) += iwl-1000.o iwl-2000.o iwl-5000.o iwl-6000.o
 iwlwifi-$(CPTCFG_IWLMVM) += iwl-7000.o iwl-8000.o
 iwlwifi-objs		+= iwl-trans.o

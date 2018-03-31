@@ -75,6 +75,7 @@
 
 #include "mvm.h"
 #include "iwl-phy-db.h"
+#include "xdma.h"
 
 #define MVM_UCODE_ALIVE_TIMEOUT	HZ
 #define MVM_UCODE_CALIB_TIMEOUT	(2*HZ)
@@ -248,9 +249,11 @@ static int iwl_alloc_fw_paging_mem(struct iwl_mvm *mvm,
 	mvm->fw_paging_db[blk_idx].fw_paging_size = FW_PAGING_SIZE;
 
 	if (dma_enabled) {
-		phys = dma_map_page(mvm->trans->dev, block, 0,
+		phys = x_dma_map_page(mvm->trans->dev, block, 0,
 				    PAGE_SIZE << order, DMA_BIDIRECTIONAL);
-		if (dma_mapping_error(mvm->trans->dev, phys)) {
+
+
+		if (x_dma_mapping_error(mvm->trans->dev, phys)) {
 			/*
 			 * free the previous pages and the current one since
 			 * we failed to map_page.
@@ -286,10 +289,10 @@ static int iwl_alloc_fw_paging_mem(struct iwl_mvm *mvm,
 		mvm->fw_paging_db[blk_idx].fw_paging_size = PAGING_BLOCK_SIZE;
 
 		if (dma_enabled) {
-			phys = dma_map_page(mvm->trans->dev, block, 0,
+			phys = x_dma_map_page(mvm->trans->dev, block, 0,
 					    PAGE_SIZE << order,
 					    DMA_BIDIRECTIONAL);
-			if (dma_mapping_error(mvm->trans->dev, phys)) {
+			if (x_dma_mapping_error(mvm->trans->dev, phys)) {
 				/*
 				 * free the previous pages and the current one
 				 * since we failed to map_page.

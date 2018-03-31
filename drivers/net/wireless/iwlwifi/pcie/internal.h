@@ -345,6 +345,7 @@ struct iwl_trans_pcie {
 	/* PCI bus related data */
 	struct pci_dev *pci_dev;
 	void __iomem *hw_base;
+	void __iomem *dma_base;
 
 	bool ucode_write_complete;
 	wait_queue_head_t ucode_write_waitq;

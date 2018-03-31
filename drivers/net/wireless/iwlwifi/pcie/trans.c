@@ -80,6 +80,7 @@
 #include "iwl-fw-error-dump.h"
 #include "internal.h"
 #include "iwl-fh.h"
+#include "xdma.h"
 
 /* extended range in FW SRAM */
 #define IWL_FW_MEM_EXTENDED_START	0x40000
@@ -92,7 +93,7 @@ static void iwl_pcie_free_fw_monitor(struct iwl_trans *trans)
 	if (!trans_pcie->fw_mon_page)
 		return;
 
-	dma_unmap_page(trans->dev, trans_pcie->fw_mon_phys,
+	x_dma_unmap_page(trans->dev, trans_pcie->fw_mon_phys,
 		       trans_pcie->fw_mon_size, DMA_FROM_DEVICE);
 	__free_pages(trans_pcie->fw_mon_page,
 		     get_order(trans_pcie->fw_mon_size));
@@ -122,7 +123,7 @@ static void iwl_pcie_alloc_fw_monitor(struct iwl_trans *trans, u8 max_power)
 		return;
 
 	if (trans_pcie->fw_mon_page) {
-		dma_sync_single_for_device(trans->dev, trans_pcie->fw_mon_phys,
+		x_dma_sync_single_for_device(trans->dev, trans_pcie->fw_mon_phys,
 					   trans_pcie->fw_mon_size,
 					   DMA_FROM_DEVICE);
 		return;
@@ -139,9 +140,9 @@ static void iwl_pcie_alloc_fw_monitor(struct iwl_trans *trans, u8 max_power)
 		if (!page)
 			continue;
 
-		phys = dma_map_page(trans->dev, page, 0, PAGE_SIZE << order,
+		phys = x_dma_map_page(trans->dev, page, 0, PAGE_SIZE << order,
 				    DMA_FROM_DEVICE);
-		if (dma_mapping_error(trans->dev, phys)) {
+		if (x_dma_mapping_error(trans->dev, phys)) {
 			__free_pages(page, order);
 			page = NULL;
 			continue;
@@ -617,6 +618,8 @@ static int iwl_pcie_load_firmware_chunk(struct iwl_trans *trans, u32 dst_addr,
 
 	trans_pcie->ucode_write_complete = false;
 
+	dev_err(trans->dev, "iwl_pcie_load_firmware_chunk phys = %llx \n", phy_addr);
+
 	iwl_write_direct32(trans,
 			   FH_TCSR_CHNL_TX_CONFIG_REG(FH_SRVC_CHNL),
 			   FH_TCSR_TX_CONFIG_REG_VAL_DMA_CHNL_PAUSE);
@@ -667,16 +670,18 @@ static int iwl_pcie_load_section(struct iwl_trans *trans, u8 section_num,
 	IWL_DEBUG_FW(trans, "[%d] uCode section being loaded...\n",
 		     section_num);
 
-	v_addr = dma_alloc_coherent(trans->dev, chunk_sz, &p_addr,
+	v_addr = x_dma_alloc_coherent(trans->dev, chunk_sz, &p_addr,
 				    GFP_KERNEL | __GFP_NOWARN);
 	if (!v_addr) {
 		IWL_DEBUG_INFO(trans, "Falling back to small chunks of DMA\n");
 		chunk_sz = PAGE_SIZE;
-		v_addr = dma_alloc_coherent(trans->dev, chunk_sz,
+		v_addr = x_dma_alloc_coherent(trans->dev, chunk_sz,
 					    &p_addr, GFP_KERNEL);
 		if (!v_addr)
 			return -ENOMEM;
 	}
+
+	dev_err(trans->dev, "iwl_pcie_load_section p_addr = %llx \n", p_addr);
 
 	for (offset = 0; offset < section->len; offset += chunk_sz) {
 		u32 copy_size, dst_addr;
@@ -709,7 +714,7 @@ static int iwl_pcie_load_section(struct iwl_trans *trans, u8 section_num,
 		}
 	}
 
-	dma_free_coherent(trans->dev, chunk_sz, v_addr, p_addr);
+	x_dma_free_coherent(trans->dev, chunk_sz, v_addr, p_addr);
 	return ret;
 }
 
@@ -2303,7 +2308,7 @@ static u32 iwl_trans_pcie_dump_rbs(struct iwl_trans *trans,
 		struct iwl_rx_mem_buffer *rxb = rxq->queue[i];
 		struct iwl_fw_error_dump_rb *rb;
 
-		dma_unmap_page(trans->dev, rxb->page_dma, max_len,
+		x_dma_unmap_page(trans->dev, rxb->page_dma, max_len,
 			       DMA_FROM_DEVICE);
 
 		rb_len += sizeof(**data) + sizeof(*rb) + max_len;
@@ -2314,7 +2319,7 @@ static u32 iwl_trans_pcie_dump_rbs(struct iwl_trans *trans,
 		rb->index = cpu_to_le32(i);
 		memcpy(rb->data, page_address(rxb->page), max_len);
 		/* remap the page for the free benefit */
-		rxb->page_dma = dma_map_page(trans->dev, rxb->page, 0,
+		rxb->page_dma = x_dma_map_page(trans->dev, rxb->page, 0,
 						     max_len,
 						     DMA_FROM_DEVICE);
 
@@ -2437,7 +2442,7 @@ iwl_trans_pcie_dump_monitor(struct iwl_trans *trans,
 			 * data. The buffer will be handed back to the device
 			 * before the firmware will be restarted.
 			 */
-			dma_sync_single_for_cpu(trans->dev,
+			x_dma_sync_single_for_cpu(trans->dev,
 						trans_pcie->fw_mon_phys,
 						trans_pcie->fw_mon_size,
 						DMA_FROM_DEVICE);
@@ -2711,7 +2716,8 @@ struct iwl_trans *iwl_trans_pcie_alloc(struct pci_dev *pdev,
 	}
 
 	trans_pcie->hw_base = pci_ioremap_bar(pdev, 0);
-	if (!trans_pcie->hw_base) {
+	trans_pcie->dma_base = pci_ioremap_bar(pdev, 2);
+	if (!trans_pcie->hw_base || !trans_pcie->dma_base) {
 		dev_err(&pdev->dev, "pci_ioremap_bar failed\n");
 		ret = -ENODEV;
 		goto out_pci_release_regions;
