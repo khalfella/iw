@@ -362,10 +362,10 @@ static void iwl_pcie_rxq_alloc_rbs(struct iwl_trans *trans, gfp_t priority)
 		rxb->page = page;
 		/* Get physical address of the RB */
 		rxb->page_dma =
-			x_dma_map_page(trans->dev, page, 0,
+			x_dma_map_page(trans, page, 0,
 				     PAGE_SIZE << trans_pcie->rx_page_order,
 				     DMA_FROM_DEVICE);
-		if (x_dma_mapping_error(trans->dev, rxb->page_dma)) {
+		if (x_dma_mapping_error(trans, rxb->page_dma)) {
 			rxb->page = NULL;
 			spin_lock(&rxq->lock);
 			list_add(&rxb->list, &rxq->rx_used);
@@ -398,7 +398,7 @@ static void iwl_pcie_rxq_free_rbs(struct iwl_trans *trans)
 	for (i = 0; i < RX_QUEUE_SIZE; i++) {
 		if (!rxq->pool[i].page)
 			continue;
-		x_dma_unmap_page(trans->dev, rxq->pool[i].page_dma,
+		x_dma_unmap_page(trans, rxq->pool[i].page_dma,
 			       PAGE_SIZE << trans_pcie->rx_page_order,
 			       DMA_FROM_DEVICE);
 		__free_pages(rxq->pool[i].page, trans_pcie->rx_page_order);
@@ -470,10 +470,10 @@ static void iwl_pcie_rx_allocator(struct iwl_trans *trans)
 			rxb->page = page;
 
 			/* Get physical address of the RB */
-			rxb->page_dma = x_dma_map_page(trans->dev, page, 0,
+			rxb->page_dma = x_dma_map_page(trans, page, 0,
 					PAGE_SIZE << trans_pcie->rx_page_order,
 					DMA_FROM_DEVICE);
-			if (x_dma_mapping_error(trans->dev, rxb->page_dma)) {
+			if (x_dma_mapping_error(trans, rxb->page_dma)) {
 				rxb->page = NULL;
 				__free_pages(page, trans_pcie->rx_page_order);
 				continue;
@@ -564,7 +564,6 @@ static int iwl_pcie_rx_alloc(struct iwl_trans *trans)
 	struct iwl_trans_pcie *trans_pcie = IWL_TRANS_GET_PCIE_TRANS(trans);
 	struct iwl_rxq *rxq = &trans_pcie->rxq;
 	struct iwl_rb_allocator *rba = &trans_pcie->rba;
-	struct device *dev = trans->dev;
 
 	memset(&trans_pcie->rxq, 0, sizeof(trans_pcie->rxq));
 
@@ -575,13 +574,13 @@ static int iwl_pcie_rx_alloc(struct iwl_trans *trans)
 		return -EINVAL;
 
 	/* Allocate the circular buffer of Read Buffer Descriptors (RBDs) */
-	rxq->bd = x_dma_zalloc_coherent(dev, sizeof(__le32) * RX_QUEUE_SIZE,
+	rxq->bd = x_dma_zalloc_coherent(trans, sizeof(__le32) * RX_QUEUE_SIZE,
 				      &rxq->bd_dma, GFP_KERNEL);
 	if (!rxq->bd)
 		goto err_bd;
 
 	/*Allocate the driver's pointer to receive buffer status */
-	rxq->rb_stts = x_dma_zalloc_coherent(dev, sizeof(*rxq->rb_stts),
+	rxq->rb_stts = x_dma_zalloc_coherent(trans, sizeof(*rxq->rb_stts),
 					   &rxq->rb_stts_dma, GFP_KERNEL);
 	if (!rxq->rb_stts)
 		goto err_rb_stts;
@@ -589,7 +588,7 @@ static int iwl_pcie_rx_alloc(struct iwl_trans *trans)
 	return 0;
 
 err_rb_stts:
-	x_dma_free_coherent(dev, sizeof(__le32) * RX_QUEUE_SIZE,
+	x_dma_free_coherent(trans, sizeof(__le32) * RX_QUEUE_SIZE,
 			  rxq->bd, rxq->bd_dma);
 	rxq->bd_dma = 0;
 	rxq->bd = NULL;
@@ -689,7 +688,7 @@ static void iwl_pcie_rx_free_rba(struct iwl_trans *trans)
 	for (i = 0; i < RX_POOL_SIZE; i++) {
 		if (!rba->pool[i].page)
 			continue;
-		x_dma_unmap_page(trans->dev, rba->pool[i].page_dma,
+		x_dma_unmap_page(trans, rba->pool[i].page_dma,
 			       PAGE_SIZE << trans_pcie->rx_page_order,
 			       DMA_FROM_DEVICE);
 		__free_pages(rba->pool[i].page, trans_pcie->rx_page_order);
@@ -776,13 +775,13 @@ void iwl_pcie_rx_free(struct iwl_trans *trans)
 	iwl_pcie_rxq_free_rbs(trans);
 	spin_unlock(&rxq->lock);
 
-	x_dma_free_coherent(trans->dev, sizeof(__le32) * RX_QUEUE_SIZE,
+	x_dma_free_coherent(trans, sizeof(__le32) * RX_QUEUE_SIZE,
 			  rxq->bd, rxq->bd_dma);
 	rxq->bd_dma = 0;
 	rxq->bd = NULL;
 
 	if (rxq->rb_stts)
-		x_dma_free_coherent(trans->dev,
+		x_dma_free_coherent(trans,
 				  sizeof(struct iwl_rb_status),
 				  rxq->rb_stts, rxq->rb_stts_dma);
 	else
@@ -845,7 +844,7 @@ static void iwl_pcie_rx_handle_rb(struct iwl_trans *trans,
 	if (WARN_ON(!rxb))
 		return;
 
-	x_dma_unmap_page(trans->dev, rxb->page_dma, max_len, DMA_FROM_DEVICE);
+	x_dma_unmap_page(trans, rxb->page_dma, max_len, DMA_FROM_DEVICE);
 
 	while (offset + sizeof(u32) + sizeof(struct iwl_cmd_header) < max_len) {
 		struct iwl_rx_packet *pkt;
@@ -937,10 +936,10 @@ static void iwl_pcie_rx_handle_rb(struct iwl_trans *trans,
 	 * rx_free list for reuse later. */
 	if (rxb->page != NULL) {
 		rxb->page_dma =
-			x_dma_map_page(trans->dev, rxb->page, 0,
+			x_dma_map_page(trans, rxb->page, 0,
 				     PAGE_SIZE << trans_pcie->rx_page_order,
 				     DMA_FROM_DEVICE);
-		if (x_dma_mapping_error(trans->dev, rxb->page_dma)) {
+		if (x_dma_mapping_error(trans, rxb->page_dma)) {
 			/*
 			 * free the page(s) as well to not break
 			 * the invariant that the items on the used
@@ -1452,7 +1451,7 @@ void iwl_pcie_free_ict(struct iwl_trans *trans)
 	struct iwl_trans_pcie *trans_pcie = IWL_TRANS_GET_PCIE_TRANS(trans);
 
 	if (trans_pcie->ict_tbl) {
-		x_dma_free_coherent(trans->dev, ICT_SIZE,
+		x_dma_free_coherent(trans, ICT_SIZE,
 				  trans_pcie->ict_tbl,
 				  trans_pcie->ict_tbl_dma);
 		trans_pcie->ict_tbl = NULL;
@@ -1470,7 +1469,7 @@ int iwl_pcie_alloc_ict(struct iwl_trans *trans)
 	struct iwl_trans_pcie *trans_pcie = IWL_TRANS_GET_PCIE_TRANS(trans);
 
 	trans_pcie->ict_tbl =
-		x_dma_zalloc_coherent(trans->dev, ICT_SIZE,
+		x_dma_zalloc_coherent(trans, ICT_SIZE,
 				   &trans_pcie->ict_tbl_dma,
 				   GFP_KERNEL);
 	if (!trans_pcie->ict_tbl)

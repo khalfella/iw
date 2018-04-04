@@ -130,7 +130,7 @@ static int iwl_pcie_alloc_dma_ptr(struct iwl_trans *trans,
 	if (WARN_ON(ptr->addr))
 		return -EINVAL;
 
-	ptr->addr = x_dma_alloc_coherent(trans->dev, size,
+	ptr->addr = x_dma_alloc_coherent(trans, size,
 				       &ptr->dma, GFP_KERNEL);
 	if (!ptr->addr)
 		return -ENOMEM;
@@ -144,7 +144,7 @@ static void iwl_pcie_free_dma_ptr(struct iwl_trans *trans,
 	if (unlikely(!ptr->addr))
 		return;
 
-	x_dma_free_coherent(trans->dev, ptr->size, ptr->addr, ptr->dma);
+	x_dma_free_coherent(trans, ptr->size, ptr->addr, ptr->dma);
 	memset(ptr, 0, sizeof(*ptr));
 }
 
@@ -394,12 +394,12 @@ static void iwl_pcie_tfd_unmap(struct iwl_trans *trans,
 
 	for (i = 1; i < num_tbs; i++) {
 		if (meta->flags & BIT(i + CMD_TB_BITMAP_POS))
-			x_dma_unmap_page(trans->dev,
+			x_dma_unmap_page(trans,
 				       iwl_pcie_tfd_tb_get_addr(tfd, i),
 				       iwl_pcie_tfd_tb_get_len(tfd, i),
 				       DMA_TO_DEVICE);
 		else
-			x_dma_unmap_single(trans->dev,
+			x_dma_unmap_single(trans,
 					 iwl_pcie_tfd_tb_get_addr(tfd, i),
 					 iwl_pcie_tfd_tb_get_len(tfd, i),
 					 DMA_TO_DEVICE);
@@ -518,7 +518,7 @@ static int iwl_pcie_txq_alloc(struct iwl_trans *trans,
 
 	/* Circular buffer of transmit frame descriptors (TFDs),
 	 * shared with device */
-	txq->tfds = x_dma_alloc_coherent(trans->dev, tfd_sz,
+	txq->tfds = x_dma_alloc_coherent(trans, tfd_sz,
 				       &txq->q.dma_addr, GFP_KERNEL);
 	if (!txq->tfds)
 		goto error;
@@ -530,7 +530,7 @@ static int iwl_pcie_txq_alloc(struct iwl_trans *trans,
 
 	scratchbuf_sz = sizeof(*txq->scratchbufs) * slots_num;
 
-	txq->scratchbufs = x_dma_alloc_coherent(trans->dev, scratchbuf_sz,
+	txq->scratchbufs = x_dma_alloc_coherent(trans, scratchbuf_sz,
 					      &txq->scratchbufs_dma,
 					      GFP_KERNEL);
 	if (!txq->scratchbufs)
@@ -540,7 +540,7 @@ static int iwl_pcie_txq_alloc(struct iwl_trans *trans,
 
 	return 0;
 err_free_tfds:
-	x_dma_free_coherent(trans->dev, tfd_sz, txq->tfds, txq->q.dma_addr);
+	x_dma_free_coherent(trans, tfd_sz, txq->tfds, txq->q.dma_addr);
 error:
 	if (txq->entries && txq_id == trans_pcie->cmd_queue)
 		for (i = 0; i < slots_num; i++)
@@ -615,7 +615,6 @@ static void iwl_pcie_txq_free(struct iwl_trans *trans, int txq_id)
 {
 	struct iwl_trans_pcie *trans_pcie = IWL_TRANS_GET_PCIE_TRANS(trans);
 	struct iwl_txq *txq = &trans_pcie->txq[txq_id];
-	struct device *dev = trans->dev;
 	int i;
 
 	if (WARN_ON(!txq))
@@ -632,13 +631,13 @@ static void iwl_pcie_txq_free(struct iwl_trans *trans, int txq_id)
 
 	/* De-alloc circular buffer of TFDs */
 	if (txq->tfds) {
-		x_dma_free_coherent(dev,
+		x_dma_free_coherent(trans,
 				  sizeof(struct iwl_tfd) * TFD_QUEUE_SIZE_MAX,
 				  txq->tfds, txq->q.dma_addr);
 		txq->q.dma_addr = 0;
 		txq->tfds = NULL;
 
-		x_dma_free_coherent(dev,
+		x_dma_free_coherent(trans,
 				  sizeof(*txq->scratchbufs) * txq->q.n_window,
 				  txq->scratchbufs, txq->scratchbufs_dma);
 	}
@@ -1519,11 +1518,11 @@ static int iwl_pcie_enqueue_hcmd(struct iwl_trans *trans,
 
 	/* map first command fragment, if any remains */
 	if (copy_size > scratch_size) {
-		phys_addr = x_dma_map_single(trans->dev,
+		phys_addr = x_dma_map_single(trans,
 					   ((u8 *)&out_cmd->hdr) + scratch_size,
 					   copy_size - scratch_size,
 					   DMA_TO_DEVICE);
-		if (x_dma_mapping_error(trans->dev, phys_addr)) {
+		if (x_dma_mapping_error(trans, phys_addr)) {
 			iwl_pcie_tfd_unmap(trans, out_meta,
 					   &txq->tfds[q->write_ptr]);
 			idx = -ENOMEM;
@@ -1545,9 +1544,9 @@ static int iwl_pcie_enqueue_hcmd(struct iwl_trans *trans,
 			continue;
 		if (cmd->dataflags[i] & IWL_HCMD_DFL_DUP)
 			data = dup_buf;
-		phys_addr = x_dma_map_single(trans->dev, (void *)data,
+		phys_addr = x_dma_map_single(trans, (void *)data,
 					   cmdlen[i], DMA_TO_DEVICE);
-		if (x_dma_mapping_error(trans->dev, phys_addr)) {
+		if (x_dma_mapping_error(trans, phys_addr)) {
 			iwl_pcie_tfd_unmap(trans, out_meta,
 					   &txq->tfds[q->write_ptr]);
 			idx = -ENOMEM;
@@ -1892,8 +1891,8 @@ int iwl_trans_pcie_tx(struct iwl_trans *trans, struct sk_buff *skb,
 
 	/* map the data for TB1 */
 	tb1_addr = ((u8 *)&dev_cmd->hdr) + IWL_HCMD_SCRATCHBUF_SIZE;
-	tb1_phys = x_dma_map_single(trans->dev, tb1_addr, tb1_len, DMA_TO_DEVICE);
-	if (unlikely(x_dma_mapping_error(trans->dev, tb1_phys)))
+	tb1_phys = x_dma_map_single(trans, tb1_addr, tb1_len, DMA_TO_DEVICE);
+	if (unlikely(x_dma_mapping_error(trans, tb1_phys)))
 		goto out_err;
 	iwl_pcie_txq_build_tfd(trans, txq, tb1_phys, tb1_len, false);
 
@@ -1903,10 +1902,10 @@ int iwl_trans_pcie_tx(struct iwl_trans *trans, struct sk_buff *skb,
 	 */
 	tb2_len = skb_headlen(skb) - hdr_len;
 	if (tb2_len > 0) {
-		dma_addr_t tb2_phys = x_dma_map_single(trans->dev,
+		dma_addr_t tb2_phys = x_dma_map_single(trans,
 						     skb->data + hdr_len,
 						     tb2_len, DMA_TO_DEVICE);
-		if (unlikely(x_dma_mapping_error(trans->dev, tb2_phys))) {
+		if (unlikely(x_dma_mapping_error(trans, tb2_phys))) {
 			iwl_pcie_tfd_unmap(trans, out_meta,
 					   &txq->tfds[q->write_ptr]);
 			goto out_err;
@@ -1923,10 +1922,10 @@ int iwl_trans_pcie_tx(struct iwl_trans *trans, struct sk_buff *skb,
 		if (!skb_frag_size(frag))
 			continue;
 
-		tb_phys = x_skb_frag_dma_map(trans->dev, frag, 0,
+		tb_phys = x_skb_frag_dma_map(trans, frag, 0,
 					   skb_frag_size(frag), DMA_TO_DEVICE);
 
-		if (unlikely(x_dma_mapping_error(trans->dev, tb_phys))) {
+		if (unlikely(x_dma_mapping_error(trans, tb_phys))) {
 			iwl_pcie_tfd_unmap(trans, out_meta,
 					   &txq->tfds[q->write_ptr]);
 			goto out_err;

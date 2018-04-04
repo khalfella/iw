@@ -93,7 +93,7 @@ static void iwl_pcie_free_fw_monitor(struct iwl_trans *trans)
 	if (!trans_pcie->fw_mon_page)
 		return;
 
-	x_dma_unmap_page(trans->dev, trans_pcie->fw_mon_phys,
+	x_dma_unmap_page(trans, trans_pcie->fw_mon_phys,
 		       trans_pcie->fw_mon_size, DMA_FROM_DEVICE);
 	__free_pages(trans_pcie->fw_mon_page,
 		     get_order(trans_pcie->fw_mon_size));
@@ -123,7 +123,7 @@ static void iwl_pcie_alloc_fw_monitor(struct iwl_trans *trans, u8 max_power)
 		return;
 
 	if (trans_pcie->fw_mon_page) {
-		x_dma_sync_single_for_device(trans->dev, trans_pcie->fw_mon_phys,
+		x_dma_sync_single_for_device(trans, trans_pcie->fw_mon_phys,
 					   trans_pcie->fw_mon_size,
 					   DMA_FROM_DEVICE);
 		return;
@@ -140,9 +140,9 @@ static void iwl_pcie_alloc_fw_monitor(struct iwl_trans *trans, u8 max_power)
 		if (!page)
 			continue;
 
-		phys = x_dma_map_page(trans->dev, page, 0, PAGE_SIZE << order,
+		phys = x_dma_map_page(trans, page, 0, PAGE_SIZE << order,
 				    DMA_FROM_DEVICE);
-		if (x_dma_mapping_error(trans->dev, phys)) {
+		if (x_dma_mapping_error(trans, phys)) {
 			__free_pages(page, order);
 			page = NULL;
 			continue;
@@ -670,12 +670,12 @@ static int iwl_pcie_load_section(struct iwl_trans *trans, u8 section_num,
 	IWL_DEBUG_FW(trans, "[%d] uCode section being loaded...\n",
 		     section_num);
 
-	v_addr = x_dma_alloc_coherent(trans->dev, chunk_sz, &p_addr,
+	v_addr = x_dma_alloc_coherent(trans, chunk_sz, &p_addr,
 				    GFP_KERNEL | __GFP_NOWARN);
 	if (!v_addr) {
 		IWL_DEBUG_INFO(trans, "Falling back to small chunks of DMA\n");
 		chunk_sz = PAGE_SIZE;
-		v_addr = x_dma_alloc_coherent(trans->dev, chunk_sz,
+		v_addr = x_dma_alloc_coherent(trans, chunk_sz,
 					    &p_addr, GFP_KERNEL);
 		if (!v_addr)
 			return -ENOMEM;
@@ -714,7 +714,7 @@ static int iwl_pcie_load_section(struct iwl_trans *trans, u8 section_num,
 		}
 	}
 
-	x_dma_free_coherent(trans->dev, chunk_sz, v_addr, p_addr);
+	x_dma_free_coherent(trans, chunk_sz, v_addr, p_addr);
 	return ret;
 }
 
@@ -2308,7 +2308,7 @@ static u32 iwl_trans_pcie_dump_rbs(struct iwl_trans *trans,
 		struct iwl_rx_mem_buffer *rxb = rxq->queue[i];
 		struct iwl_fw_error_dump_rb *rb;
 
-		x_dma_unmap_page(trans->dev, rxb->page_dma, max_len,
+		x_dma_unmap_page(trans, rxb->page_dma, max_len,
 			       DMA_FROM_DEVICE);
 
 		rb_len += sizeof(**data) + sizeof(*rb) + max_len;
@@ -2319,7 +2319,7 @@ static u32 iwl_trans_pcie_dump_rbs(struct iwl_trans *trans,
 		rb->index = cpu_to_le32(i);
 		memcpy(rb->data, page_address(rxb->page), max_len);
 		/* remap the page for the free benefit */
-		rxb->page_dma = x_dma_map_page(trans->dev, rxb->page, 0,
+		rxb->page_dma = x_dma_map_page(trans, rxb->page, 0,
 						     max_len,
 						     DMA_FROM_DEVICE);
 
@@ -2442,7 +2442,7 @@ iwl_trans_pcie_dump_monitor(struct iwl_trans *trans,
 			 * data. The buffer will be handed back to the device
 			 * before the firmware will be restarted.
 			 */
-			x_dma_sync_single_for_cpu(trans->dev,
+			x_dma_sync_single_for_cpu(trans,
 						trans_pcie->fw_mon_phys,
 						trans_pcie->fw_mon_size,
 						DMA_FROM_DEVICE);
