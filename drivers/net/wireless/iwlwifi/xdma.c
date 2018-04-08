@@ -57,27 +57,32 @@ x_dma_sync_single_for_device(struct iwl_trans *trans, dma_addr_t dma_handle,
 }
 
 void
-*x_dma_alloc_coherent(struct iwl_trans *trans, size_t size, dma_addr_t *dma_handle, gfp_t gfp)
+*x_dma_alloc_coherent_common(struct iwl_trans *trans, size_t size, dma_addr_t *dma_handle, gfp_t gfp,int bzero)
 {
-	char *c;
 	xdma_command_t *cmd;
 
-
-	c = (char *) trans->dma_base;
 	cmd = (xdma_command_t *) trans->dma_base;
 
-	cmd->in1 = size;
-	cmd->c.command = 0;
-	cmd->c.cmd = 1;
+	cmd->c.command = 0;		/* Reset Command area to zero */
+	cmd->in1 = bzero; 		/* in1 flags: bzero */
+	cmd->in2 = size;		/* in2 size */
+	cmd->c.cmd = 1;			/* Trigger XDMA command */
 	
-	/**c = 1; */			/* issue the command */
+	dev_err(trans->dev, "XDMA allocating %lx bytes phys = %llx offset = %llx\n",
+	    size, cmd->out1, cmd->out2);
+
 	return dma_alloc_coherent(trans->dev, size, dma_handle, gfp);
+}
+void
+*x_dma_alloc_coherent(struct iwl_trans *trans, size_t size, dma_addr_t *dma_handle, gfp_t gfp)
+{
+	return x_dma_alloc_coherent_common(trans, size, dma_handle, gfp, 0);
 }
 
 void
 *x_dma_zalloc_coherent(struct iwl_trans *trans, size_t size, dma_addr_t *dma_handle, gfp_t gfp)
 {
-	return dma_zalloc_coherent(trans->dev, size, dma_handle, gfp);
+	return x_dma_alloc_coherent_common(trans, size, dma_handle, gfp, 1);
 }
 
 void
