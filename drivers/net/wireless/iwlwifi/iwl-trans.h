@@ -699,6 +699,7 @@ struct iwl_trans {
 	bool ltr_enabled;
 
 	u8 num_rx_queues;
+	void __iomem *dma_base;
 
 	/* The following fields are internal only */
 	struct kmem_cache *dev_cmd_pool;

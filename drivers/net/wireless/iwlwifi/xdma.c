@@ -5,7 +5,10 @@
 #include "iwl-trans.h"
 
 typedef struct {
-	uint64_t commnad;
+	union {
+		uint8_t cmd;
+		uint64_t command;
+	} c;
 	uint64_t status;
 	uint64_t out1;
 	uint64_t out2;
@@ -56,6 +59,18 @@ x_dma_sync_single_for_device(struct iwl_trans *trans, dma_addr_t dma_handle,
 void
 *x_dma_alloc_coherent(struct iwl_trans *trans, size_t size, dma_addr_t *dma_handle, gfp_t gfp)
 {
+	char *c;
+	xdma_command_t *cmd;
+
+
+	c = (char *) trans->dma_base;
+	cmd = (xdma_command_t *) trans->dma_base;
+
+	cmd->in1 = size;
+	cmd->c.command = 0;
+	cmd->c.cmd = 1;
+	
+	/**c = 1; */			/* issue the command */
 	return dma_alloc_coherent(trans->dev, size, dma_handle, gfp);
 }
 

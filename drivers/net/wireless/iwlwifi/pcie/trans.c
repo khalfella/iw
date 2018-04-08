@@ -2728,6 +2728,7 @@ struct iwl_trans *iwl_trans_pcie_alloc(struct pci_dev *pdev,
 	pci_write_config_byte(pdev, PCI_CFG_RETRY_TIMEOUT, 0x00);
 
 	trans->dev = &pdev->dev;
+	trans->dma_base = trans_pcie->dma_base;
 	trans_pcie->pci_dev = pdev;
 	iwl_disable_interrupts(trans);
 
