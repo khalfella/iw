@@ -71,7 +71,12 @@ void
 	dev_err(trans->dev, "XDMA allocating %lx bytes phys = %llx offset = %llx\n",
 	    size, cmd->out1, cmd->out2);
 
-	return dma_alloc_coherent(trans->dev, size, dma_handle, gfp);
+	*dma_handle = cmd->out1;
+	return (char *)(trans->dma_base) + cmd->out2;
+
+	/*
+		return dma_alloc_coherent(trans->dev, size, dma_handle, gfp);
+	*/
 }
 void
 *x_dma_alloc_coherent(struct iwl_trans *trans, size_t size, dma_addr_t *dma_handle, gfp_t gfp)
@@ -89,7 +94,9 @@ void
 x_dma_free_coherent(struct iwl_trans *trans, size_t size, void *kvaddr,
 		       dma_addr_t dma_handle)
 {
+	/*
 	dma_free_coherent(trans->dev, size, kvaddr, dma_handle);
+	*/
 }
 
 
