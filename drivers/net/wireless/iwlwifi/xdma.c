@@ -100,7 +100,6 @@ void *
 x_dma_alloc_coherent_common(struct iwl_trans *trans, size_t size, dma_addr_t *dma_handle, gfp_t gfp,int bzero)
 {
 	xdma_cmd_t *cmd;
-
 	cmd = (xdma_cmd_t *) trans->dma_base;
 
 	cmd->xc_command = 0;				/* Reset Command area to zero */
@@ -149,9 +148,29 @@ void
 x_dma_free_coherent(struct iwl_trans *trans, size_t size, void *kvaddr,
 		       dma_addr_t dma_handle)
 {
-	/*
-	dma_free_coherent(trans->dev, size, kvaddr, dma_handle);
-	*/
+	xdma_cmd_t *cmd;
+	cmd = (xdma_cmd_t *) trans->dma_base;
+
+	cmd->xc_command = 0;
+	cmd->xc_type = XDMA_CMD_MAP_TYPE_COH;
+	cmd->xc_dir = 0;
+	cmd->xc_size = 0;
+	cmd->xc_hx_phys = dma_handle;
+	cmd->xc_gx_off = (uintptr_t) kvaddr - (uintptr_t) trans->dma_base;
+	cmd->xc_gb_vir = 0;
+	cmd->xc_gb_phys = 0;
+	cmd->xc_gb_off = 0;
+	smp_wmb();
+
+	*((char *) (&cmd->xc_command)) = XDMA_CMD_COMMAND_REMOVE;	/* Trigger XDMA command */
+
+	dev_err(trans->dev, "XDMA freeing bytes phys = %llx offset = %llx\n",
+	    cmd->xc_hx_phys, cmd->xc_gx_off);
+
+	if (cmd->xc_status != XDMA_CMD_STATUS_OK) {
+		dev_err(trans->dev, "%s: failed phys = %llx offset = %llx\n",
+		    __func__, cmd->xc_hx_phys, cmd->xc_gx_off);
+	}
 }
 
 
