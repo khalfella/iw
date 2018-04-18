@@ -19,6 +19,12 @@
 #define	XDMA_CMD_MAP_TYPE_COH		0x01	/* coherent map */
 #define	XDMA_CMD_MAP_TYPE_STR		0x02	/* streaming map */
 
+/* sync options */
+#define	XDMA_CMD_SYNC_FORCPU		0x01	/* sync for cpu (from device ) */
+#define	XDMA_CMD_SYNC_FORDEV		0x02	/* sync for dev (to device ) */
+
+#define XDMA_ISSUE_COMMAND(cmd, C)	((*((char *) (&(cmd)->xc_command))) = (C))
+
 typedef struct xdma_cmd_s {
 	uint64_t	xc_command;		/* alloc, rem, inq */
 	uint64_t	xc_status;		/* ok, error */
@@ -34,40 +40,150 @@ typedef struct xdma_cmd_s {
 	uint64_t	xc_gb_off;		/* guest buffer map off */
 } xdma_cmd_t;
 
+static void
+x_dma_init_cmd(xdma_cmd_t *cmd, uint64_t command, uint64_t status,
+    uint64_t type, uint64_t dir, uint64_t size, uint64_t gx_off,
+    uint64_t hx_phys, uint64_t gb_vir, uint64_t gb_phys, uint64_t gb_off)
+{
+	cmd->xc_command = command;
+	cmd->xc_status = status;
+	cmd->xc_type = type;
+	cmd->xc_dir = dir;
+	cmd->xc_size = size;
+	cmd->xc_gx_off = gx_off;
+	cmd->xc_hx_phys = hx_phys;
+	cmd->xc_gb_vir = gb_vir;
+	cmd->xc_gb_phys = gb_phys;
+	cmd->xc_gb_off = gb_off;
+}
+
+static int
+x_dma_map_info(struct iwl_trans *trans, xdma_cmd_t *cmd, dma_addr_t dma_handle)
+{
+
+	x_dma_init_cmd(cmd, 0, 0, 0, 0, 0, 0, dma_handle, 0, 0, 0);
+	smp_wmb();
+	XDMA_ISSUE_COMMAND(cmd, XDMA_CMD_COMMAND_INQUIRY);
+
+	if (cmd->xc_status != XDMA_CMD_STATUS_OK) {
+		dev_err(trans->dev, "XDMA %s:failed\n", __func__);
+		return (1);
+	}
+	return (0);
+}
+
+static dma_addr_t
+x_dma_alloc_map(struct iwl_trans *trans, uint64_t type, uint64_t zero,
+    size_t size, uint64_t *gx_off, uint64_t *hx_phys,
+    uint64_t gb_vir, uint64_t gb_phys, uint64_t gb_off) {
+
+	xdma_cmd_t *cmd;
+
+	cmd = (xdma_cmd_t *) trans->dma_base;
+	x_dma_init_cmd(cmd, 0, 0, type, zero, size, 0, 0, gb_vir, gb_phys, gb_off);
+	smp_wmb();
+	XDMA_ISSUE_COMMAND(cmd, XDMA_CMD_COMMAND_ALLOC);
+
+	dev_err(trans->dev, "XDMA %s:allocating %lx bytes phys = %llx offset = %llx\n",
+	    __func__, size, cmd->xc_hx_phys, cmd->xc_gx_off);
+
+	if (cmd->xc_status != XDMA_CMD_STATUS_OK) {
+		dev_err(trans->dev, "XDMA %s:failed allocating xdma map\n", __func__);
+		return (0);
+	}
+
+	*hx_phys = cmd->xc_hx_phys;
+	*gx_off = cmd->xc_gx_off;
+	return (*hx_phys);
+}
+
+static void
+x_dma_free_map(struct iwl_trans *trans, dma_addr_t dma_handle, uint64_t type)
+
+{
+	xdma_cmd_t *cmd;
+	cmd = (xdma_cmd_t *) trans->dma_base;
+	x_dma_init_cmd(cmd, 0, 0, type, 0, 0, 0, dma_handle, 0, 0, 0);
+	smp_wmb();
+	XDMA_ISSUE_COMMAND(cmd, XDMA_CMD_COMMAND_REMOVE);
+
+	if (cmd->xc_status != XDMA_CMD_STATUS_OK) {
+		dev_err(trans->dev, "%s: failed freeing phys = %llx\n", __func__, cmd->xc_hx_phys);
+	}
+}
+
+static void
+x_dma_sync_streaming_map(struct iwl_trans *trans, dma_addr_t dma_handle, uint64_t gx_off,
+    uint64_t gb_vir, uint64_t gb_off, size_t size, uint8_t sdir)
+{
+	xdma_cmd_t *cmd;
+
+	if (sdir == XDMA_CMD_SYNC_FORDEV) {
+		memcpy((char *) (trans->dma_base) + gx_off, (char *) gb_vir + gb_off, size);
+	}
+
+	cmd = (xdma_cmd_t *) trans->dma_base;
+	x_dma_init_cmd(cmd, 0, 0, XDMA_CMD_MAP_TYPE_STR, sdir, 0, 0, dma_handle, 0, 0, 0);
+	smp_wmb();
+	XDMA_ISSUE_COMMAND(cmd, XDMA_CMD_COMMAND_SYNC);
+
+	if (cmd->xc_status != XDMA_CMD_STATUS_OK) {
+		dev_err(trans->dev, "XDMA %s:failed syncing\n", __func__);
+		return;
+	}
+
+	if (sdir == XDMA_CMD_SYNC_FORCPU) {
+		memcpy((char *) gb_vir + gb_off, (char *) (trans->dma_base) + gx_off, size);
+	}
+}
+
+static dma_addr_t
+x_dma_alloc_streaming_map(struct iwl_trans *trans, void *cpu_addr,
+    unsigned long offset, size_t size, enum dma_data_direction dir)
+{
+	dma_addr_t hx_phys, gx_off;
+
+	if (x_dma_alloc_map(trans, XDMA_CMD_MAP_TYPE_STR, 0, size, &gx_off, &hx_phys, (uintptr_t) cpu_addr, 0, offset) == 0) {
+		return (0);
+	}
+
+	if (dir == DMA_TO_DEVICE || dir == DMA_BIDIRECTIONAL || 1 == 1) {
+		x_dma_sync_streaming_map(trans, hx_phys, gx_off, (uintptr_t) cpu_addr, offset, size, XDMA_CMD_SYNC_FORDEV);
+	}
+
+	return (hx_phys);
+}
+
+static void
+x_dma_free_streaming_map(struct iwl_trans *trans, dma_addr_t dma_handle,
+    size_t size, enum dma_data_direction dir)
+{
+
+	xdma_cmd_t *cmd;
+	cmd = (xdma_cmd_t *) trans->dma_base;
+
+	if (x_dma_map_info(trans, cmd, dma_handle) != 0)
+		return;
+
+	if (dir == DMA_FROM_DEVICE || dir == DMA_BIDIRECTIONAL || 1 == 1) {
+		x_dma_sync_streaming_map(trans, cmd->xc_hx_phys, cmd->xc_gx_off, cmd->xc_gb_vir, cmd->xc_gb_off, cmd->xc_size, XDMA_CMD_SYNC_FORCPU);
+	}
+
+	x_dma_free_map(trans, cmd->xc_hx_phys, XDMA_CMD_MAP_TYPE_STR);
+}
+
 dma_addr_t
 x_dma_map_page(struct iwl_trans *trans, struct page *page,
     unsigned long offset, size_t size, enum dma_data_direction dir)
 {
-	/*
-		We need to consider this offset thing
-
-		vir, phys  = qemu_allocate_buffer(size, dir, page [keep it with you]);
-		if (dir is (to_device) or (bi_directional)) {
-			pvir = map_page_to_vir(page);
-			copy(pvir, vir);		// copy the page to the vir
-			qemu_sync_to_device(vir);
-		}
-
-		return phys;
-	 */
-	return dma_map_page(trans->dev, page, offset, size, dir);
+	return x_dma_alloc_streaming_map(trans, page_address(page), offset, size, dir);
 }
 
 void
 x_dma_unmap_page(struct iwl_trans *trans, dma_addr_t dma_handle,
 	       size_t size, enum dma_data_direction dir)
 {
-	/*
-		if (dir is (from_device) or (bi_directional)) {
-			vir, page = qemu_tell_me_about_this_cookie(dma_handle);
-			qemu_sync_from_device(vir);
-			pvir = map_page_to_vir(page);
-			copy(vir, pvir)			// copy sync the page we saved
-		}
-
-		qemu_free_this_virtual_address(vir);
-	 */
-	dma_unmap_page(trans->dev, dma_handle, size, dir);
+	x_dma_free_streaming_map(trans, dma_handle, size, dir);
 }
 
 int
@@ -80,127 +196,77 @@ void
 x_dma_sync_single_for_cpu(struct iwl_trans *trans, dma_addr_t dma_handle,
 			size_t size, enum dma_data_direction dir)
 {
-	/*
-		if (dir is (from_device) or (bi_directional)) {
-			vir, page = qemu_tell_me_about_this_cookie(dma_handle);
-			qemu_sync_from_device(vir);
-		}
-	 */
-	dma_sync_single_for_cpu(trans->dev, dma_handle, size, dir);
+	xdma_cmd_t *cmd;
+	cmd = (xdma_cmd_t *) trans->dma_base;
+
+	if (x_dma_map_info(trans, cmd, dma_handle) != 0)
+		return;
+	x_dma_sync_streaming_map(trans, cmd->xc_hx_phys, cmd->xc_gx_off, cmd->xc_gb_vir, cmd->xc_gb_off, cmd->xc_size, XDMA_CMD_SYNC_FORCPU);
 }
 
 void
 x_dma_sync_single_for_device(struct iwl_trans *trans, dma_addr_t dma_handle,
 			   size_t size, enum dma_data_direction dir)
 {
-	dma_sync_single_for_device(trans->dev, dma_handle, size, dir);
-}
-
-void *
-x_dma_alloc_coherent_common(struct iwl_trans *trans, size_t size, dma_addr_t *dma_handle, gfp_t gfp,int bzero)
-{
 	xdma_cmd_t *cmd;
 	cmd = (xdma_cmd_t *) trans->dma_base;
 
-	cmd->xc_command = 0;				/* Reset Command area to zero */
-	cmd->xc_type = XDMA_CMD_MAP_TYPE_COH;		/* Allocate coherent map */
-	cmd->xc_dir = bzero;				/* 1 -> zero allocated mem */
-	cmd->xc_size = size;				/* size */
+	if (x_dma_map_info(trans, cmd, dma_handle) != 0)
+		return;
+	x_dma_sync_streaming_map(trans, cmd->xc_hx_phys, cmd->xc_gx_off, cmd->xc_gb_vir, cmd->xc_gb_off, cmd->xc_size, XDMA_CMD_SYNC_FORDEV);
+}
 
-	cmd->xc_hx_phys = 0;
-	cmd->xc_gx_off = 0;
-	cmd->xc_gb_vir = 0;
-	cmd->xc_gb_phys = 0;
-	cmd->xc_gb_off = 0;
+static void *
+x_dma_alloc_coherent_common(struct iwl_trans *trans, size_t size, dma_addr_t *dma_handle, int bzero)
+{
 
-	smp_wmb();
+	uint64_t hx_phys, gx_off;
 
-	*((char *) (&cmd->xc_command)) = XDMA_CMD_COMMAND_ALLOC;	/* Trigger XDMA command */
-	
-	dev_err(trans->dev, "XDMA allocating %lx bytes phys = %llx offset = %llx\n",
-	    size, cmd->xc_hx_phys, cmd->xc_gx_off);
-
-	if (cmd->xc_status != XDMA_CMD_STATUS_OK) {
-		*dma_handle = 0;
-		return (NULL);
+	*dma_handle = 0;
+	if (x_dma_alloc_map(trans, XDMA_CMD_MAP_TYPE_COH, bzero, size, &gx_off, &hx_phys, 0, 0, 0) != 0) {
+		*dma_handle = hx_phys;
+		return (char *)(trans->dma_base) + gx_off;
 	}
-
-	*dma_handle = cmd->xc_hx_phys;
-	return (char *)(trans->dma_base) + cmd->xc_gx_off;
-
-	/*
-	 * return dma_alloc_coherent(trans->dev, size, dma_handle, gfp);
-	 */
+	return (NULL);
 }
 void
 *x_dma_alloc_coherent(struct iwl_trans *trans, size_t size, dma_addr_t *dma_handle, gfp_t gfp)
 {
-	return x_dma_alloc_coherent_common(trans, size, dma_handle, gfp, 0);
+	return x_dma_alloc_coherent_common(trans, size, dma_handle, 0);
 }
 
 void
 *x_dma_zalloc_coherent(struct iwl_trans *trans, size_t size, dma_addr_t *dma_handle, gfp_t gfp)
 {
-	return x_dma_alloc_coherent_common(trans, size, dma_handle, gfp, 1);
+	return x_dma_alloc_coherent_common(trans, size, dma_handle, 1);
 }
 
 void
 x_dma_free_coherent(struct iwl_trans *trans, size_t size, void *kvaddr,
 		       dma_addr_t dma_handle)
 {
-	xdma_cmd_t *cmd;
-	cmd = (xdma_cmd_t *) trans->dma_base;
-
-	cmd->xc_command = 0;
-	cmd->xc_type = XDMA_CMD_MAP_TYPE_COH;
-	cmd->xc_dir = 0;
-	cmd->xc_size = 0;
-	cmd->xc_hx_phys = dma_handle;
-	cmd->xc_gx_off = (uintptr_t) kvaddr - (uintptr_t) trans->dma_base;
-	cmd->xc_gb_vir = 0;
-	cmd->xc_gb_phys = 0;
-	cmd->xc_gb_off = 0;
-	smp_wmb();
-
-	*((char *) (&cmd->xc_command)) = XDMA_CMD_COMMAND_REMOVE;	/* Trigger XDMA command */
-
-	dev_err(trans->dev, "XDMA freeing bytes phys = %llx offset = %llx\n",
-	    cmd->xc_hx_phys, cmd->xc_gx_off);
-
-	if (cmd->xc_status != XDMA_CMD_STATUS_OK) {
-		dev_err(trans->dev, "%s: failed phys = %llx offset = %llx\n",
-		    __func__, cmd->xc_hx_phys, cmd->xc_gx_off);
-	}
+	x_dma_free_map(trans, dma_handle, XDMA_CMD_MAP_TYPE_COH);
 }
-
-
 
 dma_addr_t
 x_dma_map_single(struct iwl_trans *trans, void *cpu_addr, size_t size,
 	       enum dma_data_direction dir)
 {
-	/*
-		Allocate mapping, sync it if necessary. save the vaddr, viraddress
-	 */
-	return dma_map_single(trans->dev, cpu_addr, size, dir);
+	return x_dma_alloc_streaming_map(trans, cpu_addr, 0, size, dir);
 }
 
 void
 x_dma_unmap_single(struct iwl_trans *trans, dma_addr_t dma_addr,
 		 size_t size, enum dma_data_direction dir)
 {
-	/*
-		query the map, get the vaddr and the viraddress
-		sync back if necessary
-		remove the mapping
-	 */
-	dma_unmap_single(trans->dev, dma_addr, size, dir);
+	x_dma_free_streaming_map(trans, dma_addr, size, dir);
 }
 
 dma_addr_t x_skb_frag_dma_map(struct iwl_trans *trans, const skb_frag_t *frag,
     size_t offset, size_t size, enum dma_data_direction dir)
 {
-	return skb_frag_dma_map(trans->dev, frag, offset, size, dir);
+	return x_dma_map_page(trans, skb_frag_page(frag),
+			    frag->page_offset + offset, size, dir);
 }
 
 #endif
