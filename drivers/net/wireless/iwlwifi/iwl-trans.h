@@ -700,6 +700,7 @@ struct iwl_trans {
 
 	u8 num_rx_queues;
 	void __iomem *dma_base;
+	struct mutex xdma_mutex;
 
 	/* The following fields are internal only */
 	struct kmem_cache *dev_cmd_pool;

@@ -2729,6 +2729,7 @@ struct iwl_trans *iwl_trans_pcie_alloc(struct pci_dev *pdev,
 
 	trans->dev = &pdev->dev;
 	trans->dma_base = trans_pcie->dma_base;
+	mutex_init(&trans->xdma_mutex);
 	trans_pcie->pci_dev = pdev;
 	iwl_disable_interrupts(trans);
 

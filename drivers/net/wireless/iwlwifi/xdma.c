@@ -79,6 +79,11 @@ x_dma_alloc_map(struct iwl_trans *trans, uint64_t type, uint64_t zero,
 
 	xdma_cmd_t *cmd;
 
+	/* This is a workaround for a bug in the driver */
+	if (size == 0x200) {
+		size = 0x1000;
+	}
+
 	cmd = (xdma_cmd_t *) trans->dma_base;
 	x_dma_init_cmd(cmd, 0, 0, type, zero, size, 0, 0, gb_vir, gb_phys, gb_off);
 	smp_wmb();
@@ -172,18 +177,38 @@ x_dma_free_streaming_map(struct iwl_trans *trans, dma_addr_t dma_handle,
 	x_dma_free_map(trans, cmd->xc_hx_phys, XDMA_CMD_MAP_TYPE_STR);
 }
 
+static void *
+x_dma_alloc_coherent_common(struct iwl_trans *trans, size_t size, dma_addr_t *dma_handle, int bzero)
+{
+
+	uint64_t hx_phys, gx_off;
+
+	*dma_handle = 0;
+	if (x_dma_alloc_map(trans, XDMA_CMD_MAP_TYPE_COH, bzero, size, &gx_off, &hx_phys, 0, 0, 0) != 0) {
+		*dma_handle = hx_phys;
+		return (char *)(trans->dma_base) + gx_off;
+	}
+	return (NULL);
+}
+
 dma_addr_t
 x_dma_map_page(struct iwl_trans *trans, struct page *page,
     unsigned long offset, size_t size, enum dma_data_direction dir)
 {
-	return x_dma_alloc_streaming_map(trans, page_address(page), offset, size, dir);
+	dma_addr_t phys;
+	mutex_lock(&trans->xdma_mutex);
+	phys = x_dma_alloc_streaming_map(trans, page_address(page), offset, size, dir);
+	mutex_unlock(&trans->xdma_mutex);
+	return (phys);
 }
 
 void
 x_dma_unmap_page(struct iwl_trans *trans, dma_addr_t dma_handle,
 	       size_t size, enum dma_data_direction dir)
 {
+	mutex_lock(&trans->xdma_mutex);
 	x_dma_free_streaming_map(trans, dma_handle, size, dir);
+	mutex_unlock(&trans->xdma_mutex);
 }
 
 int
@@ -199,9 +224,13 @@ x_dma_sync_single_for_cpu(struct iwl_trans *trans, dma_addr_t dma_handle,
 	xdma_cmd_t *cmd;
 	cmd = (xdma_cmd_t *) trans->dma_base;
 
-	if (x_dma_map_info(trans, cmd, dma_handle) != 0)
-		return;
-	x_dma_sync_streaming_map(trans, cmd->xc_hx_phys, cmd->xc_gx_off, cmd->xc_gb_vir, cmd->xc_gb_off, cmd->xc_size, XDMA_CMD_SYNC_FORCPU);
+	mutex_lock(&trans->xdma_mutex);
+	if (x_dma_map_info(trans, cmd, dma_handle) == 0) {
+		x_dma_sync_streaming_map(trans, cmd->xc_hx_phys,
+		    cmd->xc_gx_off, cmd->xc_gb_vir, cmd->xc_gb_off,
+		    cmd->xc_size, XDMA_CMD_SYNC_FORCPU);
+	}
+	mutex_unlock(&trans->xdma_mutex);
 }
 
 void
@@ -211,62 +240,75 @@ x_dma_sync_single_for_device(struct iwl_trans *trans, dma_addr_t dma_handle,
 	xdma_cmd_t *cmd;
 	cmd = (xdma_cmd_t *) trans->dma_base;
 
-	if (x_dma_map_info(trans, cmd, dma_handle) != 0)
-		return;
-	x_dma_sync_streaming_map(trans, cmd->xc_hx_phys, cmd->xc_gx_off, cmd->xc_gb_vir, cmd->xc_gb_off, cmd->xc_size, XDMA_CMD_SYNC_FORDEV);
-}
-
-static void *
-x_dma_alloc_coherent_common(struct iwl_trans *trans, size_t size, dma_addr_t *dma_handle, int bzero)
-{
-
-	uint64_t hx_phys, gx_off;
-
-	*dma_handle = 0;
-	if (x_dma_alloc_map(trans, XDMA_CMD_MAP_TYPE_COH, bzero, size, &gx_off, &hx_phys, 0, 0, 0) != 0) {
-		*dma_handle = hx_phys;
-		return (char *)(trans->dma_base) + gx_off;
+	mutex_lock(&trans->xdma_mutex);
+	if (x_dma_map_info(trans, cmd, dma_handle) == 0) {
+		x_dma_sync_streaming_map(trans, cmd->xc_hx_phys,
+		    cmd->xc_gx_off, cmd->xc_gb_vir, cmd->xc_gb_off,
+		    cmd->xc_size, XDMA_CMD_SYNC_FORDEV);
 	}
-	return (NULL);
-}
-void
-*x_dma_alloc_coherent(struct iwl_trans *trans, size_t size, dma_addr_t *dma_handle, gfp_t gfp)
-{
-	return x_dma_alloc_coherent_common(trans, size, dma_handle, 0);
+	mutex_unlock(&trans->xdma_mutex);
 }
 
-void
-*x_dma_zalloc_coherent(struct iwl_trans *trans, size_t size, dma_addr_t *dma_handle, gfp_t gfp)
+void *
+x_dma_alloc_coherent(struct iwl_trans *trans, size_t size, dma_addr_t *dma_handle, gfp_t gfp)
 {
-	return x_dma_alloc_coherent_common(trans, size, dma_handle, 1);
+	void *ret;
+	mutex_lock(&trans->xdma_mutex);
+	ret =  x_dma_alloc_coherent_common(trans, size, dma_handle, 0);
+	mutex_unlock(&trans->xdma_mutex);
+	return (ret);
+}
+
+void *
+x_dma_zalloc_coherent(struct iwl_trans *trans, size_t size, dma_addr_t *dma_handle, gfp_t gfp)
+{
+	void *ret;
+	mutex_lock(&trans->xdma_mutex);
+	ret =  x_dma_alloc_coherent_common(trans, size, dma_handle, 1);
+	mutex_unlock(&trans->xdma_mutex);
+	return (ret);
 }
 
 void
 x_dma_free_coherent(struct iwl_trans *trans, size_t size, void *kvaddr,
 		       dma_addr_t dma_handle)
 {
+	mutex_lock(&trans->xdma_mutex);
 	x_dma_free_map(trans, dma_handle, XDMA_CMD_MAP_TYPE_COH);
+	mutex_unlock(&trans->xdma_mutex);
 }
 
 dma_addr_t
 x_dma_map_single(struct iwl_trans *trans, void *cpu_addr, size_t size,
 	       enum dma_data_direction dir)
 {
-	return x_dma_alloc_streaming_map(trans, cpu_addr, 0, size, dir);
+	dma_addr_t phys;
+	mutex_lock(&trans->xdma_mutex);
+	phys = x_dma_alloc_streaming_map(trans, cpu_addr, 0, size, dir);
+	mutex_unlock(&trans->xdma_mutex);
+	return (phys);
 }
 
 void
 x_dma_unmap_single(struct iwl_trans *trans, dma_addr_t dma_addr,
 		 size_t size, enum dma_data_direction dir)
 {
+	mutex_lock(&trans->xdma_mutex);
 	x_dma_free_streaming_map(trans, dma_addr, size, dir);
+	mutex_unlock(&trans->xdma_mutex);
 }
 
 dma_addr_t x_skb_frag_dma_map(struct iwl_trans *trans, const skb_frag_t *frag,
     size_t offset, size_t size, enum dma_data_direction dir)
 {
-	return x_dma_map_page(trans, skb_frag_page(frag),
+	dma_addr_t phys;
+
+	mutex_lock(&trans->xdma_mutex);
+	phys = x_dma_map_page(trans, skb_frag_page(frag),
 			    frag->page_offset + offset, size, dir);
+	mutex_unlock(&trans->xdma_mutex);
+
+	return (phys);
 }
 
 #endif
