@@ -119,9 +119,23 @@ x_dma_free_map(struct iwl_trans *trans, dma_addr_t dma_handle, uint64_t type)
 
 static void
 x_dma_sync_streaming_map(struct iwl_trans *trans, dma_addr_t dma_handle, uint64_t gx_off,
-    uint64_t gb_vir, uint64_t gb_off, size_t size, uint8_t sdir)
+    uint64_t gb_vir, uint64_t gb_phys, uint64_t gb_off, size_t size, uint8_t sdir)
 {
 	xdma_cmd_t *cmd;
+
+
+	if (gb_phys != 0) {
+		cmd = (xdma_cmd_t *) trans->dma_base;
+		x_dma_init_cmd(cmd, 0, 0, XDMA_CMD_MAP_TYPE_STR, sdir, 0, 0, dma_handle, 0, 0, 0);
+		smp_wmb();
+		XDMA_ISSUE_COMMAND(cmd, XDMA_CMD_COMMAND_SYNC);
+
+		if (cmd->xc_status != XDMA_CMD_STATUS_OK) {
+			dev_err(trans->dev, "XDMA %s:failed syncing\n", __func__);
+			return;
+		}
+		return;
+	}
 
 	if (sdir == XDMA_CMD_SYNC_FORDEV) {
 		memcpy((char *) (trans->dma_base) + gx_off, (char *) gb_vir + gb_off, size);
@@ -143,17 +157,17 @@ x_dma_sync_streaming_map(struct iwl_trans *trans, dma_addr_t dma_handle, uint64_
 }
 
 static dma_addr_t
-x_dma_alloc_streaming_map(struct iwl_trans *trans, void *cpu_addr,
+x_dma_alloc_streaming_map(struct iwl_trans *trans, void *cpu_addr, uint64_t gb_phys,
     unsigned long offset, size_t size, enum dma_data_direction dir)
 {
 	dma_addr_t hx_phys, gx_off;
 
-	if (x_dma_alloc_map(trans, XDMA_CMD_MAP_TYPE_STR, 0, size, &gx_off, &hx_phys, (uintptr_t) cpu_addr, 0, offset) == 0) {
+	if (x_dma_alloc_map(trans, XDMA_CMD_MAP_TYPE_STR, 0, size, &gx_off, &hx_phys, (uintptr_t) cpu_addr, gb_phys, offset) == 0) {
 		return (0);
 	}
 
 	if (dir == DMA_TO_DEVICE || dir == DMA_BIDIRECTIONAL || 1 == 1) {
-		x_dma_sync_streaming_map(trans, hx_phys, gx_off, (uintptr_t) cpu_addr, offset, size, XDMA_CMD_SYNC_FORDEV);
+		x_dma_sync_streaming_map(trans, hx_phys, gx_off, (uintptr_t) cpu_addr, gb_phys, offset, size, XDMA_CMD_SYNC_FORDEV);
 	}
 
 	return (hx_phys);
@@ -171,7 +185,8 @@ x_dma_free_streaming_map(struct iwl_trans *trans, dma_addr_t dma_handle,
 		return;
 
 	if (dir == DMA_FROM_DEVICE || dir == DMA_BIDIRECTIONAL || 1 == 1) {
-		x_dma_sync_streaming_map(trans, cmd->xc_hx_phys, cmd->xc_gx_off, cmd->xc_gb_vir, cmd->xc_gb_off, cmd->xc_size, XDMA_CMD_SYNC_FORCPU);
+		x_dma_sync_streaming_map(trans, cmd->xc_hx_phys, cmd->xc_gx_off,
+		    cmd->xc_gb_vir, cmd->xc_gb_phys, cmd->xc_gb_off, cmd->xc_size, XDMA_CMD_SYNC_FORCPU);
 	}
 
 	x_dma_free_map(trans, cmd->xc_hx_phys, XDMA_CMD_MAP_TYPE_STR);
@@ -197,7 +212,7 @@ x_dma_map_page(struct iwl_trans *trans, struct page *page,
 {
 	dma_addr_t phys;
 	mutex_lock(&trans->xdma_mutex);
-	phys = x_dma_alloc_streaming_map(trans, page_address(page), offset, size, dir);
+	phys = x_dma_alloc_streaming_map(trans, page_address(page), page_to_phys(page), offset, size, dir);
 	mutex_unlock(&trans->xdma_mutex);
 	return (phys);
 }
@@ -227,7 +242,7 @@ x_dma_sync_single_for_cpu(struct iwl_trans *trans, dma_addr_t dma_handle,
 	mutex_lock(&trans->xdma_mutex);
 	if (x_dma_map_info(trans, cmd, dma_handle) == 0) {
 		x_dma_sync_streaming_map(trans, cmd->xc_hx_phys,
-		    cmd->xc_gx_off, cmd->xc_gb_vir, cmd->xc_gb_off,
+		    cmd->xc_gx_off, cmd->xc_gb_vir, cmd->xc_gb_phys, cmd->xc_gb_off,
 		    cmd->xc_size, XDMA_CMD_SYNC_FORCPU);
 	}
 	mutex_unlock(&trans->xdma_mutex);
@@ -243,7 +258,7 @@ x_dma_sync_single_for_device(struct iwl_trans *trans, dma_addr_t dma_handle,
 	mutex_lock(&trans->xdma_mutex);
 	if (x_dma_map_info(trans, cmd, dma_handle) == 0) {
 		x_dma_sync_streaming_map(trans, cmd->xc_hx_phys,
-		    cmd->xc_gx_off, cmd->xc_gb_vir, cmd->xc_gb_off,
+		    cmd->xc_gx_off, cmd->xc_gb_vir, cmd->xc_gb_phys, cmd->xc_gb_off,
 		    cmd->xc_size, XDMA_CMD_SYNC_FORDEV);
 	}
 	mutex_unlock(&trans->xdma_mutex);
@@ -284,7 +299,7 @@ x_dma_map_single(struct iwl_trans *trans, void *cpu_addr, size_t size,
 {
 	dma_addr_t phys;
 	mutex_lock(&trans->xdma_mutex);
-	phys = x_dma_alloc_streaming_map(trans, cpu_addr, 0, size, dir);
+	phys = x_dma_alloc_streaming_map(trans, cpu_addr, 0,  0, size, dir);
 	mutex_unlock(&trans->xdma_mutex);
 	return (phys);
 }
